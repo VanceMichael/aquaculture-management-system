@@ -1,71 +1,72 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+
 from ..database import get_db
-from ..models import HarvestSale, Batch
 from ..schemas import HarvestSaleCreate, HarvestSaleUpdate, HarvestSaleResponse
+from ..services import HarvestService
 
 router = APIRouter(
     prefix="/api/harvest-sales",
-    tags=["出塘销售"]
+    tags=["出塘销售"],
 )
 
+
+def get_harvest_service(db: Session = Depends(get_db)) -> HarvestService:
+    return HarvestService(db)
+
+
 @router.post("/", response_model=HarvestSaleResponse)
-def create_harvest_sale(sale: HarvestSaleCreate, db: Session = Depends(get_db)):
-    db_batch = db.query(Batch).filter(Batch.id == sale.batch_id).first()
-    if not db_batch:
-        raise HTTPException(status_code=404, detail="批次不存在")
-    
-    if sale.total_amount is None:
-        sale.total_amount = sale.weight * sale.unit_price
-    
-    new_sale = HarvestSale(**sale.dict())
-    db.add(new_sale)
-    db.commit()
-    db.refresh(new_sale)
-    return new_sale
+def create_harvest_sale(
+    sale: HarvestSaleCreate,
+    service: HarvestService = Depends(get_harvest_service),
+) -> HarvestSaleResponse:
+    try:
+        return service.create_harvest_sale(sale.dict())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.get("/", response_model=List[HarvestSaleResponse])
-def get_harvest_sales(skip: int = 0, limit: int = 100, batch_id: int = None, db: Session = Depends(get_db)):
-    query = db.query(HarvestSale)
-    if batch_id:
-        query = query.filter(HarvestSale.batch_id == batch_id)
-    sales = query.offset(skip).limit(limit).all()
-    return sales
+def get_harvest_sales(
+    skip: int = 0,
+    limit: int = 100,
+    batch_id: Optional[int] = None,
+    service: HarvestService = Depends(get_harvest_service),
+) -> List[HarvestSaleResponse]:
+    return service.get_harvest_sales(skip=skip, limit=limit, batch_id=batch_id)
+
 
 @router.get("/{sale_id}/", response_model=HarvestSaleResponse)
-def get_harvest_sale(sale_id: int, db: Session = Depends(get_db)):
-    sale = db.query(HarvestSale).filter(HarvestSale.id == sale_id).first()
+def get_harvest_sale(
+    sale_id: int,
+    service: HarvestService = Depends(get_harvest_service),
+) -> HarvestSaleResponse:
+    sale = service.get_harvest_sale(sale_id)
     if not sale:
         raise HTTPException(status_code=404, detail="出塘销售记录不存在")
     return sale
 
+
 @router.put("/{sale_id}/", response_model=HarvestSaleResponse)
-def update_harvest_sale(sale_id: int, sale: HarvestSaleUpdate, db: Session = Depends(get_db)):
-    db_sale = db.query(HarvestSale).filter(HarvestSale.id == sale_id).first()
-    if not db_sale:
-        raise HTTPException(status_code=404, detail="出塘销售记录不存在")
-    
-    update_data = sale.dict(exclude_unset=True)
-    
-    if 'weight' in update_data or 'unit_price' in update_data:
-        weight = update_data.get('weight', db_sale.weight)
-        unit_price = update_data.get('unit_price', db_sale.unit_price)
-        update_data['total_amount'] = weight * unit_price
-    
-    for key, value in update_data.items():
-        setattr(db_sale, key, value)
-    
-    db.commit()
-    db.refresh(db_sale)
-    return db_sale
+def update_harvest_sale(
+    sale_id: int,
+    sale: HarvestSaleUpdate,
+    service: HarvestService = Depends(get_harvest_service),
+) -> HarvestSaleResponse:
+    try:
+        return service.update_harvest_sale(sale_id, sale.dict(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.delete("/{sale_id}/")
-def delete_harvest_sale(sale_id: int, db: Session = Depends(get_db)):
-    db_sale = db.query(HarvestSale).filter(HarvestSale.id == sale_id).first()
-    if not db_sale:
-        raise HTTPException(status_code=404, detail="出塘销售记录不存在")
-    
-    db.delete(db_sale)
-    db.commit()
-    return {"message": "出塘销售记录删除成功"}
+def delete_harvest_sale(
+    sale_id: int,
+    service: HarvestService = Depends(get_harvest_service),
+) -> dict:
+    try:
+        service.delete_harvest_sale(sale_id)
+        return {"message": "出塘销售记录删除成功"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
